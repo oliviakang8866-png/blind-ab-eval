@@ -484,7 +484,11 @@ function headerThumb(label, url) {
 }
 
 function cast(rowIndex, choice) {
-  votes[rowIndex] = choice;
+  if (votes[rowIndex] === choice) {
+    delete votes[rowIndex]; // clicking the already-chosen option again deselects it
+  } else {
+    votes[rowIndex] = choice;
+  }
   saveLocalVotes();
   renderRow(rowIndex);
   submitRow(rowIndex);
