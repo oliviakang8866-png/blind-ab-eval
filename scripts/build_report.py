@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import random
+import time
 
 
 DEFAULT_FAIL_REASONS = [
@@ -327,10 +328,16 @@ const EXEC_URL = '__EXEC_URL__';
 // Flip to true once you've tested the flow — it then forces evaluators to
 // finish every row before the submit button unlocks.
 const REQUIRE_ALL_ROWS = __REQUIRE_ALL_ROWS__;
-const NAME_KEY = 'blind-eval-name';
-const VOTES_KEY_PREFIX = 'blind-eval-votes-';
-const REMARKS_KEY_PREFIX = 'blind-eval-remarks-';
-const QUALITY_KEY_PREFIX = 'blind-eval-quality-';
+// Bumped on every rebuild — deliberately invalidates any locally cached name/
+// votes/remarks/quality selections from a previous version of this page, so
+// each new deploy starts from a clean slate instead of showing stale local
+// state. The Google Sheet itself is untouched by this (it's the source of
+// truth); this only affects what a given browser has cached.
+const BUILD_VERSION = '__BUILD_VERSION__';
+const NAME_KEY = 'blind-eval-name-' + BUILD_VERSION;
+const VOTES_KEY_PREFIX = 'blind-eval-votes-' + BUILD_VERSION + '-';
+const REMARKS_KEY_PREFIX = 'blind-eval-remarks-' + BUILD_VERSION + '-';
+const QUALITY_KEY_PREFIX = 'blind-eval-quality-' + BUILD_VERSION + '-';
 let evaluator = localStorage.getItem(NAME_KEY) || '';
 let votes = {};
 let remarks = {};
@@ -692,6 +699,18 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+// Sweep out any localStorage keys left behind by a previous build version.
+(function purgeStaleLocalStorage() {
+  const prefix = 'blind-eval-';
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+  keys.forEach(function(k) {
+    if (k && k.indexOf(prefix) === 0 && k.indexOf(BUILD_VERSION) === -1) {
+      localStorage.removeItem(k);
+    }
+  });
+})();
+
 if (evaluator) {
   document.getElementById('name-gate').style.display = 'none';
   loadMyVotes();
@@ -708,6 +727,7 @@ if (evaluator) {
 def main():
     args = parse_args()
     data = build_data(args)
+    build_version = str(int(time.time()))
 
     html_doc = (HTML_TEMPLATE
         .replace('__TITLE__', args.title)
@@ -717,6 +737,7 @@ def main():
         .replace('__REQUIRE_ALL_ROWS__', 'true' if args.require_all_rows else 'false')
         .replace('__FAIL_REASONS_JSON__', json.dumps(DEFAULT_FAIL_REASONS, ensure_ascii=False))
         .replace('__NOT_HQ_REASONS_JSON__', json.dumps(DEFAULT_NOT_HQ_REASONS, ensure_ascii=False))
+        .replace('__BUILD_VERSION__', build_version)
     )
 
     with open(args.output, 'w', encoding='utf-8') as f:
