@@ -42,6 +42,8 @@ DEFAULT_FAIL_REASONS = [
     ('5.1', 'Muslim Appearance Generated（生成穆斯林形象）'),
     ('5.2', 'Inappropriate Exposure（不当裸露）'),
     ('5.3', 'Other Unexpected Content（其他非预期内容）'),
+    ('6.1', 'Main item Mismatch（主商品不一致）'),
+    ('6.2', 'Attach item Mismatch（挂载品不相似）'),
 ]
 
 DEFAULT_NOT_HQ_REASONS = [
