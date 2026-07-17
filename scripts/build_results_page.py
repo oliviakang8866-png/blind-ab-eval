@@ -54,6 +54,10 @@ def parse_args():
                     help='Column in --row-model-map-csv giving the row index (default: use the CSV row order, 0-based)')
     p.add_argument('--model1-col', default='model_type1')
     p.add_argument('--model2-col', default='model_type2')
+    p.add_argument('--total-rows', type=int, default=None,
+                    help='Total rows in the dataset, used for the evaluator progress module '
+                         '(e.g. "62/100"). Auto-derived from --row-model-map-csv row count if that '
+                         'flag is given; otherwise the progress module shows raw counts with no total.')
     return p.parse_args()
 
 
@@ -86,20 +90,25 @@ HTML_TEMPLATE = r'''<!doctype html>
   .warn { color: #d9a441; font-size: 12px; margin-bottom: 20px; }
 
   #toolbar {
-    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap;
     background: #111; border: 1px solid #262626; border-radius: 10px;
     padding: 12px 16px; margin-bottom: 20px;
   }
-  #toolbar select {
-    background: #1c1c1c; color: #ddd; border: 1px solid #333; border-radius: 6px;
-    padding: 6px 10px; font-size: 13px;
+  #toolbar .filter-label { font-size: 12px; color: #999; margin-bottom: 6px; }
+  #evaluator-checkboxes { display: flex; gap: 12px; flex-wrap: wrap; }
+  #evaluator-checkboxes label {
+    display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: #ddd;
+    cursor: pointer; white-space: nowrap;
   }
   #toolbar button {
     background: #1c1c1c; border: 1px solid #333; color: #ccc; border-radius: 6px;
-    padding: 6px 14px; font-size: 13px; cursor: pointer;
+    padding: 6px 14px; font-size: 13px; cursor: pointer; align-self: flex-start;
   }
   #toolbar button:hover { background: #2a2a2a; }
-  #loading { color: #888; font-size: 13px; }
+  #loading { color: #888; font-size: 13px; align-self: flex-start; margin-top: 6px; }
+
+  .progress-bar-track { background: #262626; border-radius: 4px; height: 8px; width: 140px; overflow: hidden; }
+  .progress-bar-fill { background: #4a9eff; height: 100%; }
 
   .card {
     background: #111; border: 1px solid #262626; border-radius: 10px;
@@ -135,11 +144,10 @@ HTML_TEMPLATE = r'''<!doctype html>
 <div class="warn">⚠️ 这个页面会展示真实模型对应关系，不要把链接发给评测人员</div>
 
 <div id="toolbar">
-  <label>筛选打分人：
-    <select id="evaluator-filter" onchange="render()">
-      <option value="">全部</option>
-    </select>
-  </label>
+  <div>
+    <div class="filter-label">筛选打分人（可多选，全不选=全部）：</div>
+    <div id="evaluator-checkboxes"></div>
+  </div>
   <button onclick="loadData()">刷新数据</button>
   <span id="loading"></span>
 </div>
@@ -149,6 +157,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 <script>
 const EXEC_URL = '__EXEC_URL__';
 const ROW_MODEL_MAP = __ROW_MODEL_MAP_JSON__; // row_index -> [model1, model2], or {} if not needed
+const TOTAL_ROWS = __TOTAL_ROWS__; // 0 = unknown, progress module shows raw counts only
 
 let allRows = [];
 let allCompletions = [];
@@ -190,12 +199,17 @@ function loadData() {
 }
 
 function populateEvaluatorFilter() {
-  const sel = document.getElementById('evaluator-filter');
-  const current = sel.value;
+  const container = document.getElementById('evaluator-checkboxes');
+  const previouslyChecked = new Set(getSelectedEvaluators());
   const evaluators = Array.from(new Set(allRows.map(function(r) { return r.evaluator; }))).sort();
-  sel.innerHTML = '<option value="">全部</option>' +
-    evaluators.map(function(e) { return '<option value="' + esc(e) + '">' + esc(e) + '</option>'; }).join('');
-  if (evaluators.indexOf(current) !== -1) sel.value = current;
+  container.innerHTML = evaluators.map(function(e) {
+    const checked = previouslyChecked.has(e) ? ' checked' : '';
+    return '<label><input type="checkbox" value="' + esc(e) + '"' + checked + ' onchange="render()"> ' + esc(e) + '</label>';
+  }).join('');
+}
+
+function getSelectedEvaluators() {
+  return Array.from(document.querySelectorAll('#evaluator-checkboxes input:checked')).map(function(cb) { return cb.value; });
 }
 
 function esc(s) {
@@ -279,21 +293,52 @@ function topReasons(reasonMap, n) {
 
 function pct(n, d) { return d ? (n / d * 100).toFixed(1) + '%' : '—'; }
 
+function renderProgressModule() {
+  const evaluators = Array.from(new Set(allRows.map(function(r) { return r.evaluator; }))).sort();
+  const submittedSet = new Set(allCompletions.map(function(c) { return c.evaluator; }));
+
+  let html = '<div class="card"><h2>评测人进度' + (TOTAL_ROWS ? '（共 ' + TOTAL_ROWS + ' 行）' : '') + '</h2><div class="table-wrap"><table>';
+  html += '<tr><th>评测人</th><th class="num">已打标</th><th class="num">完全填完</th><th>完成进度</th><th class="num">已点提交</th></tr>';
+  evaluators.forEach(function(ev) {
+    const evRows = allRows.filter(function(r) { return r.evaluator === ev; });
+    const completed = evRows.filter(isRowComplete).length;
+    const submitted = submittedSet.has(ev);
+    const p = TOTAL_ROWS ? Math.round(completed / TOTAL_ROWS * 100) : 0;
+    html += '<tr><td>' + esc(ev) + '</td>' +
+      '<td class="num">' + evRows.length + (TOTAL_ROWS ? ' / ' + TOTAL_ROWS : '') + '</td>' +
+      '<td class="num">' + completed + (TOTAL_ROWS ? ' / ' + TOTAL_ROWS : '') + '</td>' +
+      '<td>' + (TOTAL_ROWS
+        ? '<div class="progress-bar-track"><div class="progress-bar-fill" style="width:' + p + '%"></div></div>'
+        : '—') + '</td>' +
+      '<td class="num">' + (submitted ? '<span class="pill good">是</span>' : '<span class="pill neutral">否</span>') + '</td></tr>';
+  });
+  html += '</table></div></div>';
+  return html;
+}
+
 function render() {
   if (!allRows.length) return;
-  const filterEvaluator = document.getElementById('evaluator-filter').value;
-  const rows = filterEvaluator ? allRows.filter(function(r) { return r.evaluator === filterEvaluator; }) : allRows;
+  const selected = getSelectedEvaluators();
+  const rows = selected.length ? allRows.filter(function(r) { return selected.indexOf(r.evaluator) !== -1; }) : allRows;
   const stats = computeStats(rows);
+
+  const filterLabel = selected.length === 0 ? '全部评测人合计'
+    : selected.length === 1 ? esc(selected[0]) + ' 的打标情况'
+    : selected.map(esc).join('、') + ' 合计';
 
   let html = '';
 
   // Overview cards
-  html += '<div class="card"><h2>' + (filterEvaluator ? esc(filterEvaluator) + ' 的打标情况' : '全部评测人合计') + '</h2>';
+  html += '<div class="card"><h2>' + filterLabel + '</h2>';
   html += '<div class="stat-row">';
   html += '<div class="stat"><span class="v">' + stats.totalRows + '</span><span class="l">总打标行数</span></div>';
   html += '<div class="stat"><span class="v">' + stats.completedCount + '</span><span class="l">完全填完（GSB+双边质量）</span></div>';
   html += '<div class="stat"><span class="v">' + allCompletions.length + '</span><span class="l">点击过"提交本次评测"的人数</span></div>';
   html += '</div></div>';
+
+  // Evaluator progress module — always shows everyone regardless of the
+  // checkbox filter above (the filter only scopes the breakdown cards below).
+  html += renderProgressModule();
 
   // GSB breakdown
   html += '<div class="card"><h2>GSB 选择分布</h2><div class="table-wrap"><table><tr><th>选项</th><th class="num">次数</th><th class="num">占比</th></tr>';
@@ -376,11 +421,16 @@ def main():
         else 'A_model/B_model 直接作为模型标识使用（未提供额外映射）'
     )
 
+    total_rows = args.total_rows
+    if total_rows is None:
+        total_rows = len(row_model_map) if row_model_map else 0
+
     html_doc = (HTML_TEMPLATE
         .replace('__TITLE__', args.title)
         .replace('__EXEC_URL__', args.exec_url)
         .replace('__ROW_MODEL_MAP_JSON__', json.dumps(row_model_map, ensure_ascii=False))
         .replace('__MAPPING_NOTE__', mapping_note)
+        .replace('__TOTAL_ROWS__', str(total_rows))
     )
 
     with open(args.output, 'w', encoding='utf-8') as f:

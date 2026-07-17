@@ -269,7 +269,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     background: #4a9eff; color: #fff; cursor: pointer;
   }
   #finish-bar button:disabled { background: #333; color: #777; cursor: not-allowed; }
-  #finish-bar .hint { font-size: 12px; color: #888; margin-top: 8px; }
+  #finish-bar .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.6; }
+  #finish-bar .hint a { color: #4a9eff; text-decoration: none; }
+  #finish-bar .hint a:hover { text-decoration: underline; }
   #finish-screen {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 2000;
     align-items: center; justify-content: center; text-align: center;
@@ -490,6 +492,19 @@ function completedCount() {
   return n;
 }
 
+// 1-based row numbers (matching the "#N" shown in each row's header) that
+// are still missing something.
+function getIncompleteRowNumbers() {
+  const missing = [];
+  for (let i = 0; i < DATA.length; i++) if (!isRowComplete(i)) missing.push(i + 1);
+  return missing;
+}
+
+function scrollToRow(rowNumber) {
+  const el = document.getElementById('row-' + (rowNumber - 1));
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function renderSummary() {
   const total = DATA.length;
   const doneCount = completedCount();
@@ -505,14 +520,27 @@ function renderSummary() {
 
   const finishBtn = document.getElementById('finish-btn');
   const finishHint = document.getElementById('finish-hint');
+  const missing = getIncompleteRowNumbers();
+
   if (doneCount >= total || !REQUIRE_ALL_ROWS) {
     finishBtn.disabled = false;
     finishBtn.textContent = '提交本次评测' + (!REQUIRE_ALL_ROWS && doneCount < total ? '（测试模式，未打满也可点）' : '');
-    finishHint.textContent = !REQUIRE_ALL_ROWS ? '⚠️ 测试模式：未强制要求打满全部行数' : '';
   } else {
     finishBtn.disabled = true;
-    finishBtn.textContent = '提交本次评测（还差 ' + (total - doneCount) + ' 行未完成）';
-    finishHint.textContent = '每行需要选 GSB + 两边都填质量评测（Fail/Pass 还要选原因）才算完成；每次操作会立即保存，这个按钮只是全部完成后的最终确认';
+    finishBtn.textContent = '提交本次评测（还差 ' + missing.length + ' 行未完成）';
+  }
+
+  if (missing.length === 0) {
+    finishHint.innerHTML = !REQUIRE_ALL_ROWS ? '⚠️ 测试模式：未强制要求打满全部行数' : '';
+  } else {
+    const shown = missing.slice(0, 20);
+    const links = shown.map(function(n) {
+      return '<a href="javascript:void(0)" onclick="scrollToRow(' + n + ')">#' + n + '</a>';
+    }).join('、');
+    const more = missing.length > 20 ? '，等共 ' + missing.length + ' 行' : '';
+    finishHint.innerHTML =
+      '每行需要选 GSB + 两边都填质量评测（Fail/Pass 还要选原因）才算完成。' +
+      '<br>还没完成：' + links + more + '（点击行号可跳转）';
   }
 
   applyFilters();
@@ -520,6 +548,15 @@ function renderSummary() {
 
 function finishEvaluation() {
   const doneCount = completedCount();
+  const missing = getIncompleteRowNumbers();
+  if (missing.length > 0) {
+    // Can only get here in test mode (the button is disabled otherwise) —
+    // give one last explicit list before letting them submit anyway.
+    const preview = missing.slice(0, 20).map(function(n) { return '#' + n; }).join('、') +
+      (missing.length > 20 ? '，等共 ' + missing.length + ' 行' : '');
+    const proceed = confirm('还有 ' + missing.length + ' 行未完成：' + preview + '\n\n确定现在提交吗？（测试模式允许未完成也提交）');
+    if (!proceed) return;
+  }
   fetch(EXEC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
