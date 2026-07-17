@@ -15,7 +15,10 @@ Turns a CSV of two competing image-generation results into a shareable, no-login
 - **Blind by design**: options are randomly shuffled at generation time and the real identity is *never* sent to the client in a way that could leak — even after voting, the UI only ever shows "选项 A" / "选项 B", not which model they were. Only the Google Sheet (via `A_model`/`B_model` columns) knows the mapping.
 - **Scoring per row**: A好 / B好 / 都好 / 都不好, plus a free-text remark box.
 - **Scoring per option**: Fail / Pass / High Quality. Fail and Pass each unlock a scrollable multi-select checklist of specific reason codes (see `scripts/build_report.py` for the default taxonomy — face identity, body proportion, background quality, etc.). Selections are stored in the Sheet as full label text, not just codes.
+- **A row only counts as done once everything is filled in**: GSB choice set, AND both A and B have a quality status, AND any status other than High Quality has at least one reason picked. The submit button only unlocks (with `--require-all-rows`) once every row meets this bar — not just once a GSB choice exists.
+- **Row filters** (position-based, so they never leak which side is which): only-GSB-empty, only-quality-incomplete, only-missing-reason, plus an A-status and B-status dropdown (Fail/Pass/High Quality/empty) — lets an evaluator jump straight to what they haven't finished instead of scrolling all 100 rows.
 - **Completion flow**: a sticky bottom bar tracks progress and unlocks a final "submit" button once the evaluator has covered every row (or immediately, in test mode), which logs a `completions` row and shows a thank-you screen.
+- **Live results dashboard** (`results.html`, Phase 5) — a separate, unlisted page for whoever runs the eval (not the evaluators) that reads straight from the Sheet and shows, per evaluator and combined: rows completed, per-model Fail/Pass/High Quality counts and rates, GSB win counts, and Fail/Pass-reason breakdowns. Has its own evaluator filter.
 
 ## Why this architecture (read before deploying differently)
 
@@ -100,8 +103,32 @@ The live URL is `https://<owner>.github.io/<repo-name>/`.
 7. If you added new columns to `Code.gs` (e.g. customized the payload), also delete the **header row** so it regenerates with the new columns on the next real submission — `getSheet_()` only writes headers when the sheet is completely empty.
 8. Only now add `--require-all-rows` and regenerate/redeploy the final `index.html`.
 
+## Phase 5 — Results dashboard (optional, for whoever runs the eval)
+
+`results.html` is a second static page, generated separately, that live-reads the Sheet via `?action=getAllVotes` — no need to re-export CSVs to check progress. It reveals real model identity, so **don't link to it from index.html and don't send the URL to evaluators.**
+
+Two ways to run `scripts/build_results_page.py`, depending on whether the labels you stored in the Sheet (`--option1-label`/`--option2-label` back in Phase 2) are already the real, stable identity or not:
+
+- **Labels are already real and don't vary row to row** (the common case): just point it at the same `--exec-url`, no extra flags needed. `A_model`/`B_model` as stored are used directly.
+- **Labels are generic (`version1`/`version2`) because the real model varies per row** (e.g. the two options come from a source column that's itself already an A/B test, so which real model produced "option 1" changes row to row): pass `--row-model-map-csv` pointing at a CSV with a real-model-code column pair, plus `--model1-col`/`--model2-col`. It embeds a row_index-keyed map and resolves version1/version2 → real code client-side, the same two-hop logic as `scripts/translate_to_model_codes.py` (position → version1/version2 → real code), just done live in JS instead of offline in Python.
+
+```bash
+python3 scripts/build_results_page.py \
+  --exec-url "https://script.google.com/macros/s/XXXX/exec" \
+  --title "项目名称 结果看板" \
+  --output results.html
+  # add --row-model-map-csv/--model1-col/--model2-col only if needed, see above
+
+cp results.html /path/to/my-eval-repo/
+cd /path/to/my-eval-repo && git add results.html && git commit -m "Add results dashboard" && git push
+```
+
+It reads live on every page load (plus a manual "刷新数据" button) — no rebuild needed as new votes come in. Only rebuild/redeploy it if you change `--exec-url`, the title, or the row-model mapping.
+
 ## Files
 
-- `scripts/build_report.py` — CSV → `index.html` generator. Run `--help` for all flags.
-- `assets/Code.gs` — Apps Script backend (pure JSON API, no HTML serving — see architecture note).
+- `scripts/build_report.py` — CSV → `index.html` generator (the evaluator-facing page). Run `--help` for all flags.
+- `scripts/build_results_page.py` — → `results.html` generator (live results dashboard, for the eval owner only). Run `--help` for all flags.
+- `scripts/translate_to_model_codes.py` / `translate_full.py` / `analyze_gsb.py` — offline analysis helpers for post-hoc CSV exports from the Sheet; useful for one-off deep dives (fail-reason breakdowns, per-evaluator stats) beyond what the live dashboard shows. Run `--help` on each.
+- `assets/Code.gs` — Apps Script backend (pure JSON API, no HTML serving — see architecture note). Exposes `getMyVotes` (single evaluator, used by index.html) and `getAllVotes`/`getAllCompletions` (everyone, used by results.html).
 - `assets/appsscript.json` — manifest with `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS`.
