@@ -642,6 +642,16 @@ function renderQualityCount(rowIndex, side) {
   el.textContent = n > 0 ? '已选 ' + n + ' 项' : '';
 }
 
+// Rapid consecutive actions on the same row (pick GSB, then set quality
+// status, then tick a reason) each call submitRow() independently. Each
+// payload is built synchronously so it always reflects the freshest state at
+// call time, but the fetches themselves are async — without serializing
+// them, a later (more complete) request could arrive at the server before
+// an earlier (staler) one, and the upsert would leave the stale snapshot as
+// the final row content, silently dropping whatever the later click added.
+// Queue one in-flight request per row so they always land in call order.
+const pendingSubmits = {};
+
 function submitRow(rowIndex) {
   renderSummary();
 
@@ -669,23 +679,28 @@ function submitRow(rowIndex) {
     bQualityReason: reasonCodesToLabels(qB.status, qB.reasons),
   };
 
-  fetch(EXEC_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload),
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
-      if (res && res.ok) {
-        statusEl.textContent = '已保存 ✓';
-      } else {
-        statusEl.textContent = '保存失败，请重试';
-      }
-      setTimeout(function() { if (statusEl.textContent === '已保存 ✓') statusEl.textContent = ''; }, 1500);
+  const doSend = function() {
+    return fetch(EXEC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
     })
-    .catch(function() {
-      statusEl.textContent = '保存失败，请检查网络后重试';
-    });
+      .then(function(r) { return r.json(); })
+      .then(function(res) {
+        if (res && res.ok) {
+          statusEl.textContent = '已保存 ✓';
+        } else {
+          statusEl.textContent = '保存失败，请重试';
+        }
+        setTimeout(function() { if (statusEl.textContent === '已保存 ✓') statusEl.textContent = ''; }, 1500);
+      })
+      .catch(function() {
+        statusEl.textContent = '保存失败，请检查网络后重试';
+      });
+  };
+
+  const prior = pendingSubmits[rowIndex] || Promise.resolve();
+  pendingSubmits[rowIndex] = prior.then(doSend, doSend);
 }
 
 function cell(label, url) {
