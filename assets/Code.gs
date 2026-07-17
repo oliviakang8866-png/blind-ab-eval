@@ -12,6 +12,9 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.action === 'getMyVotes') {
     return jsonOut_({ ok: true, votes: getMyVotes_(e.parameter.evaluator || '') });
   }
+  if (e && e.parameter && e.parameter.action === 'getAllVotes') {
+    return jsonOut_({ ok: true, rows: getAllVotes_(), completions: getAllCompletions_() });
+  }
   return jsonOut_({ ok: true, message: 'This is a JSON API backend, not a page. See the GitHub Pages link you were given.' });
 }
 
@@ -93,6 +96,37 @@ function getMyVotes_(evaluator) {
     }
   }
   return result;
+}
+
+// Returns every row of the votes sheet as an array of {header: value} objects,
+// for the results dashboard (results.html) to aggregate client-side. Public
+// (no evaluator filter) — the results page is meant to show everyone's data.
+function getAllVotes_() {
+  const sheet = getSheet_();
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+  const headers = values[0];
+  const rows = [];
+  for (let r = 1; r < values.length; r++) {
+    const obj = {};
+    headers.forEach(function(h, i) {
+      const cell = values[r][i];
+      obj[h] = (cell instanceof Date) ? cell.toISOString() : cell;
+    });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function getAllCompletions_() {
+  const sheet = getCompletionsSheet_();
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+  const rows = [];
+  for (let r = 1; r < values.length; r++) {
+    rows.push({ timestamp: values[r][0] instanceof Date ? values[r][0].toISOString() : values[r][0], evaluator: values[r][1] });
+  }
+  return rows;
 }
 
 function getCompletionsSheet_() {

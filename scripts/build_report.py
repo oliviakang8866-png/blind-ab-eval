@@ -176,6 +176,24 @@ HTML_TEMPLATE = r'''<!doctype html>
   #evaluator-badge { font-size: 12px; color: #9ecbff; }
   #save-status { font-size: 11px; color: #666; min-width: 70px; }
 
+  #filter-bar {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    background: #0e0e0e; border: 1px solid #262626; border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 16px; font-size: 12px; color: #bbb;
+  }
+  #filter-bar label { display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+  #filter-bar select {
+    background: #1c1c1c; color: #ddd; border: 1px solid #333; border-radius: 5px;
+    padding: 3px 6px; font-size: 12px;
+  }
+  #filter-bar button {
+    background: #1c1c1c; border: 1px solid #333; color: #ccc; border-radius: 5px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  #filter-bar button:hover { background: #2a2a2a; }
+  #filter-count { margin-left: auto; color: #888; }
+  .row.filtered-out { display: none; }
+
   .row {
     background: #111; border: 1px solid #262626; border-radius: 10px;
     padding: 16px; margin-bottom: 20px;
@@ -303,6 +321,33 @@ HTML_TEMPLATE = r'''<!doctype html>
 <div class="subtitle">共 __TOTAL__ 条 · 盲测对比（左右顺序随机打乱）· 点击图片可放大 · 打分实时写入 Google Sheet</div>
 
 <div id="summary"></div>
+
+<div id="filter-bar">
+  <label><input type="checkbox" id="filter-empty-gsb" onchange="applyFilters()"> 只看 GSB 未选</label>
+  <label><input type="checkbox" id="filter-empty-quality" onchange="applyFilters()"> 只看质量评测未填（A或B任一空）</label>
+  <label><input type="checkbox" id="filter-missing-reason" onchange="applyFilters()"> 只看选了 Fail/Pass 但没填原因</label>
+  <label>A 质量状态：
+    <select id="filter-a-status" onchange="applyFilters()">
+      <option value="">不限</option>
+      <option value="empty">未填</option>
+      <option value="fail">Fail</option>
+      <option value="pass">Pass</option>
+      <option value="high_quality">High Quality</option>
+    </select>
+  </label>
+  <label>B 质量状态：
+    <select id="filter-b-status" onchange="applyFilters()">
+      <option value="">不限</option>
+      <option value="empty">未填</option>
+      <option value="fail">Fail</option>
+      <option value="pass">Pass</option>
+      <option value="high_quality">High Quality</option>
+    </select>
+  </label>
+  <button onclick="resetFilters()">清除筛选</button>
+  <span id="filter-count"></span>
+</div>
+
 <div id="rows"></div>
 
 <div id="finish-bar">
@@ -375,6 +420,19 @@ function getQuality(rowIndex, side) {
   return { status: q.status || '', reasons: q.reasons || [] };
 }
 
+// A row only counts as done once: the GSB choice is set, AND both A and B
+// have a quality status, AND any status other than high_quality has at
+// least one reason picked.
+function isRowComplete(rowIndex) {
+  if (!votes[rowIndex]) return false;
+  const qa = getQuality(rowIndex, 'A');
+  const qb = getQuality(rowIndex, 'B');
+  if (!qa.status || !qb.status) return false;
+  if (qa.status !== 'high_quality' && qa.reasons.length === 0) return false;
+  if (qb.status !== 'high_quality' && qb.reasons.length === 0) return false;
+  return true;
+}
+
 // Turns stored reason codes (e.g. "2.2") back into their full label text for
 // the Sheet, so the export is self-explanatory without cross-referencing codes.
 function reasonCodesToLabels(status, codes) {
@@ -426,32 +484,42 @@ function loadMyVotes() {
     .catch(function() { /* ignore, local votes already shown */ });
 }
 
+function completedCount() {
+  let n = 0;
+  for (let i = 0; i < DATA.length; i++) if (isRowComplete(i)) n++;
+  return n;
+}
+
 function renderSummary() {
   const total = DATA.length;
+  const doneCount = completedCount();
   const votedCount = Object.keys(votes).length;
-  const pct = total ? Math.round(votedCount / total * 100) : 0;
+  const pct = total ? Math.round(doneCount / total * 100) : 0;
   const el = document.getElementById('summary');
   el.innerHTML =
     '<span id="evaluator-badge">评测人：' + esc(evaluator) + '</span>' +
-    '<div class="stat"><span class="v">' + votedCount + '/' + total + '</span><span class="l">已评分</span></div>' +
+    '<div class="stat"><span class="v">' + doneCount + '/' + total + '</span><span class="l">已完成（含质量评测）</span></div>' +
+    (votedCount !== doneCount ? '<div class="stat"><span class="v">' + votedCount + '/' + total + '</span><span class="l">已选GSB</span></div>' : '') +
     '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
     '<span id="save-status"></span>';
 
   const finishBtn = document.getElementById('finish-btn');
   const finishHint = document.getElementById('finish-hint');
-  if (votedCount >= total || !REQUIRE_ALL_ROWS) {
+  if (doneCount >= total || !REQUIRE_ALL_ROWS) {
     finishBtn.disabled = false;
-    finishBtn.textContent = '提交本次评测' + (!REQUIRE_ALL_ROWS && votedCount < total ? '（测试模式，未打满也可点）' : '');
+    finishBtn.textContent = '提交本次评测' + (!REQUIRE_ALL_ROWS && doneCount < total ? '（测试模式，未打满也可点）' : '');
     finishHint.textContent = !REQUIRE_ALL_ROWS ? '⚠️ 测试模式：未强制要求打满全部行数' : '';
   } else {
     finishBtn.disabled = true;
-    finishBtn.textContent = '提交本次评测（还差 ' + (total - votedCount) + ' 行）';
-    finishHint.textContent = '每行打分会立即保存，这个按钮只是全部完成后的最终确认';
+    finishBtn.textContent = '提交本次评测（还差 ' + (total - doneCount) + ' 行未完成）';
+    finishHint.textContent = '每行需要选 GSB + 两边都填质量评测（Fail/Pass 还要选原因）才算完成；每次操作会立即保存，这个按钮只是全部完成后的最终确认';
   }
+
+  applyFilters();
 }
 
 function finishEvaluation() {
-  const votedCount = Object.keys(votes).length;
+  const doneCount = completedCount();
   fetch(EXEC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -460,7 +528,7 @@ function finishEvaluation() {
     .catch(function() { /* local votes are already saved regardless */ })
     .finally(function() {
       document.getElementById('finish-screen-text').textContent =
-        '你一共完成了 ' + votedCount + ' / ' + DATA.length + ' 行打分，结果已经写入统计表格。';
+        '你一共完成了 ' + doneCount + ' / ' + DATA.length + ' 行打分，结果已经写入统计表格。';
       document.getElementById('finish-screen').classList.add('open');
     });
 }
@@ -680,6 +748,66 @@ function buildRows() {
   const container = document.getElementById('rows');
   container.innerHTML = DATA.map(row => '<div class="row" id="row-' + row.index + '"></div>').join('');
   DATA.forEach(row => renderRow(row.index));
+  applyFilters();
+}
+
+// Filters operate on A/B *position* only (never on real model identity) so
+// the evaluator can't use them to reverse-engineer which side is which.
+function rowMatchesFilters(rowIndex) {
+  const choice = votes[rowIndex];
+  const qa = getQuality(rowIndex, 'A');
+  const qb = getQuality(rowIndex, 'B');
+
+  const emptyGsb = document.getElementById('filter-empty-gsb').checked;
+  const emptyQuality = document.getElementById('filter-empty-quality').checked;
+  const missingReason = document.getElementById('filter-missing-reason').checked;
+  const aStatusFilter = document.getElementById('filter-a-status').value;
+  const bStatusFilter = document.getElementById('filter-b-status').value;
+
+  if (emptyGsb && choice) return false;
+  if (emptyQuality && qa.status && qb.status) return false;
+  if (missingReason) {
+    const aMissing = qa.status && qa.status !== 'high_quality' && qa.reasons.length === 0;
+    const bMissing = qb.status && qb.status !== 'high_quality' && qb.reasons.length === 0;
+    if (!aMissing && !bMissing) return false;
+  }
+  if (aStatusFilter) {
+    if (aStatusFilter === 'empty' ? !!qa.status : qa.status !== aStatusFilter) return false;
+  }
+  if (bStatusFilter) {
+    if (bStatusFilter === 'empty' ? !!qb.status : qb.status !== bStatusFilter) return false;
+  }
+  return true;
+}
+
+function resetFilters() {
+  document.getElementById('filter-empty-gsb').checked = false;
+  document.getElementById('filter-empty-quality').checked = false;
+  document.getElementById('filter-missing-reason').checked = false;
+  document.getElementById('filter-a-status').value = '';
+  document.getElementById('filter-b-status').value = '';
+  applyFilters();
+}
+
+function applyFilters() {
+  const filterBar = document.getElementById('filter-bar');
+  if (!filterBar) return; // not built yet (name gate still showing)
+  let visible = 0;
+  DATA.forEach(function(row) {
+    const el = document.getElementById('row-' + row.index);
+    if (!el) return;
+    const match = rowMatchesFilters(row.index);
+    el.classList.toggle('filtered-out', !match);
+    if (match) visible++;
+  });
+  const anyFilterActive =
+    document.getElementById('filter-empty-gsb').checked ||
+    document.getElementById('filter-empty-quality').checked ||
+    document.getElementById('filter-missing-reason').checked ||
+    document.getElementById('filter-a-status').value ||
+    document.getElementById('filter-b-status').value;
+  document.getElementById('filter-count').textContent =
+    anyFilterActive ? ('筛选后显示 ' + visible + ' / ' + DATA.length + ' 行') : '';
 }
 
 document.addEventListener('click', function(e) {
