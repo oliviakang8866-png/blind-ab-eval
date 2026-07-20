@@ -55,11 +55,17 @@ function submitVote_(data) {
   try {
     const sheet = getSheet_();
 
-    // upsert: find existing row for this evaluator + row_index and overwrite it
+    // upsert: find existing row for this evaluator + row_index and overwrite it.
+    // Both sides MUST go through String() — Sheets silently stores a
+    // numeric-looking evaluator name (e.g. someone typing "720" as their
+    // name) as an actual Number cell, and a bare === against the string
+    // sent by the client then never matches, so every subsequent save for
+    // that evaluator appends a new row instead of updating, fragmenting
+    // their answers across duplicate rows. Do not remove the String() casts.
     const values = sheet.getDataRange().getValues();
     let targetRow = -1;
     for (let r = 1; r < values.length; r++) {
-      if (values[r][1] === data.evaluator && String(values[r][2]) === String(data.rowIndex)) {
+      if (String(values[r][1]) === String(data.evaluator) && String(values[r][2]) === String(data.rowIndex)) {
         targetRow = r + 1; // 1-indexed sheet row
         break;
       }
@@ -91,7 +97,7 @@ function getMyVotes_(evaluator) {
   const values = sheet.getDataRange().getValues();
   const result = {};
   for (let r = 1; r < values.length; r++) {
-    if (values[r][1] === evaluator) {
+    if (String(values[r][1]) === String(evaluator)) {
       result[values[r][2]] = values[r][4];
     }
   }
@@ -149,7 +155,7 @@ function submitCompletion_(evaluator) {
     const values = sheet.getDataRange().getValues();
     let targetRow = -1;
     for (let r = 1; r < values.length; r++) {
-      if (values[r][1] === evaluator) {
+      if (String(values[r][1]) === String(evaluator)) {
         targetRow = r + 1;
         break;
       }
